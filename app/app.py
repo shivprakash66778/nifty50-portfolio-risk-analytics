@@ -294,7 +294,6 @@ elif page == "💼 Portfolio Builder":
     else:
         st.warning("Portfolio data not found. Run src/portfolio.py first.")
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 4: Risk Assessment
 # ══════════════════════════════════════════════════════════════════════════════
@@ -302,32 +301,110 @@ elif page == "⚠️ Risk Assessment":
     st.title("Risk Assessment")
 
     risk_df = load_risk_report()
+
     if risk_df is not None and len(risk_df) > 0:
         st.subheader("Risk-Return Scatter")
-        fig = px.scatter(risk_df, x="Ann_Volatility", y="Ann_Return",
-                         text="Name", size="Sharpe_Ratio",
-                         color="Sharpe_Ratio", color_continuous_scale="RdYlGn",
-                         hover_data=["Max_Drawdown", "Beta"])
+
+        risk_plot_df = risk_df.copy()
+
+        # Convert important columns to numeric safely
+        numeric_cols = [
+            "Ann_Volatility",
+            "Ann_Return",
+            "Sharpe_Ratio",
+            "Max_Drawdown",
+            "Beta",
+            "VaR_95"
+        ]
+
+        for col in numeric_cols:
+            if col in risk_plot_df.columns:
+                risk_plot_df[col] = pd.to_numeric(risk_plot_df[col], errors="coerce")
+
+        # Drop rows where essential plotting values are missing
+        risk_plot_df = risk_plot_df.dropna(
+            subset=["Ann_Volatility", "Ann_Return", "Sharpe_Ratio"]
+        )
+
+        # Plotly marker size cannot be negative.
+        # Sharpe_Ratio can be negative, so create safe positive size.
+        risk_plot_df["Sharpe_Size"] = risk_plot_df["Sharpe_Ratio"].clip(lower=0)
+
+        # If all Sharpe ratios are <= 0, use constant marker size
+        if risk_plot_df["Sharpe_Size"].max() == 0:
+            risk_plot_df["Sharpe_Size"] = 1
+
+        # Make sure marker size is not too tiny
+        risk_plot_df["Sharpe_Size"] = risk_plot_df["Sharpe_Size"] + 0.1
+
+        hover_cols = [c for c in ["Max_Drawdown", "Beta"] if c in risk_plot_df.columns]
+
+        fig = px.scatter(
+            risk_plot_df,
+            x="Ann_Volatility",
+            y="Ann_Return",
+            text="Name" if "Name" in risk_plot_df.columns else None,
+            size="Sharpe_Size",
+            color="Sharpe_Ratio",
+            color_continuous_scale="RdYlGn",
+            hover_data=hover_cols,
+            title="Risk-Return Profile of NIFTY-50 Stocks"
+        )
+
         fig.update_traces(textposition="top center", textfont_size=8)
         fig.update_layout(height=600)
         st.plotly_chart(fig, use_container_width=True)
 
         # Top/bottom tables
         st.subheader("Top 10 by Sharpe Ratio")
-        cols = ["Name", "Ann_Return", "Ann_Volatility", "Sharpe_Ratio",
-                "Sortino_Ratio", "Max_Drawdown", "VaR_95", "Beta"]
+
+        cols = [
+            "Name",
+            "Ann_Return",
+            "Ann_Volatility",
+            "Sharpe_Ratio",
+            "Sortino_Ratio",
+            "Max_Drawdown",
+            "VaR_95",
+            "Beta"
+        ]
+
         valid_cols = [c for c in cols if c in risk_df.columns]
-        st.dataframe(risk_df.sort_values("Sharpe_Ratio", ascending=False).head(10)[valid_cols],
-                     use_container_width=True)
+
+        if "Sharpe_Ratio" in risk_df.columns:
+            st.dataframe(
+                risk_df.sort_values("Sharpe_Ratio", ascending=False)
+                .head(10)[valid_cols],
+                use_container_width=True
+            )
+        else:
+            st.warning("Sharpe_Ratio column not found in risk report.")
 
         st.subheader("Riskiest 10 Stocks (by Max Drawdown)")
-        st.dataframe(risk_df.sort_values("Max_Drawdown").head(10)[valid_cols],
-                     use_container_width=True)
+
+        if "Max_Drawdown" in risk_df.columns:
+            st.dataframe(
+                risk_df.sort_values("Max_Drawdown")
+                .head(10)[valid_cols],
+                use_container_width=True
+            )
+        else:
+            st.warning("Max_Drawdown column not found in risk report.")
 
         # VaR distribution
         st.subheader("Value at Risk (95%) Distribution")
-        fig = px.histogram(risk_df, x="VaR_95", nbins=30, title="Daily VaR(95%) Distribution")
-        st.plotly_chart(fig, use_container_width=True)
+
+        if "VaR_95" in risk_df.columns:
+            fig = px.histogram(
+                risk_df,
+                x="VaR_95",
+                nbins=30,
+                title="Daily VaR(95%) Distribution"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("VaR_95 column not found in risk report.")
+
     else:
         st.warning("Risk data not found. Run src/risk_assessment.py first.")
 
