@@ -294,7 +294,6 @@ elif page == "💼 Portfolio Builder":
     else:
         st.warning("Portfolio data not found. Run src/portfolio.py first.")
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 4: Risk Assessment
 # ══════════════════════════════════════════════════════════════════════════════
@@ -302,32 +301,110 @@ elif page == "⚠️ Risk Assessment":
     st.title("Risk Assessment")
 
     risk_df = load_risk_report()
+
     if risk_df is not None and len(risk_df) > 0:
         st.subheader("Risk-Return Scatter")
-        fig = px.scatter(risk_df, x="Ann_Volatility", y="Ann_Return",
-                         text="Name", size="Sharpe_Ratio",
-                         color="Sharpe_Ratio", color_continuous_scale="RdYlGn",
-                         hover_data=["Max_Drawdown", "Beta"])
+
+        risk_plot_df = risk_df.copy()
+
+        # Convert important columns to numeric safely
+        numeric_cols = [
+            "Ann_Volatility",
+            "Ann_Return",
+            "Sharpe_Ratio",
+            "Max_Drawdown",
+            "Beta",
+            "VaR_95"
+        ]
+
+        for col in numeric_cols:
+            if col in risk_plot_df.columns:
+                risk_plot_df[col] = pd.to_numeric(risk_plot_df[col], errors="coerce")
+
+        # Drop rows where essential plotting values are missing
+        risk_plot_df = risk_plot_df.dropna(
+            subset=["Ann_Volatility", "Ann_Return", "Sharpe_Ratio"]
+        )
+
+        # Plotly marker size cannot be negative.
+        # Sharpe_Ratio can be negative, so create safe positive size.
+        risk_plot_df["Sharpe_Size"] = risk_plot_df["Sharpe_Ratio"].clip(lower=0)
+
+        # If all Sharpe ratios are <= 0, use constant marker size
+        if risk_plot_df["Sharpe_Size"].max() == 0:
+            risk_plot_df["Sharpe_Size"] = 1
+
+        # Make sure marker size is not too tiny
+        risk_plot_df["Sharpe_Size"] = risk_plot_df["Sharpe_Size"] + 0.1
+
+        hover_cols = [c for c in ["Max_Drawdown", "Beta"] if c in risk_plot_df.columns]
+
+        fig = px.scatter(
+            risk_plot_df,
+            x="Ann_Volatility",
+            y="Ann_Return",
+            text="Name" if "Name" in risk_plot_df.columns else None,
+            size="Sharpe_Size",
+            color="Sharpe_Ratio",
+            color_continuous_scale="RdYlGn",
+            hover_data=hover_cols,
+            title="Risk-Return Profile of NIFTY-50 Stocks"
+        )
+
         fig.update_traces(textposition="top center", textfont_size=8)
         fig.update_layout(height=600)
         st.plotly_chart(fig, use_container_width=True)
 
         # Top/bottom tables
         st.subheader("Top 10 by Sharpe Ratio")
-        cols = ["Name", "Ann_Return", "Ann_Volatility", "Sharpe_Ratio",
-                "Sortino_Ratio", "Max_Drawdown", "VaR_95", "Beta"]
+
+        cols = [
+            "Name",
+            "Ann_Return",
+            "Ann_Volatility",
+            "Sharpe_Ratio",
+            "Sortino_Ratio",
+            "Max_Drawdown",
+            "VaR_95",
+            "Beta"
+        ]
+
         valid_cols = [c for c in cols if c in risk_df.columns]
-        st.dataframe(risk_df.sort_values("Sharpe_Ratio", ascending=False).head(10)[valid_cols],
-                     use_container_width=True)
+
+        if "Sharpe_Ratio" in risk_df.columns:
+            st.dataframe(
+                risk_df.sort_values("Sharpe_Ratio", ascending=False)
+                .head(10)[valid_cols],
+                use_container_width=True
+            )
+        else:
+            st.warning("Sharpe_Ratio column not found in risk report.")
 
         st.subheader("Riskiest 10 Stocks (by Max Drawdown)")
-        st.dataframe(risk_df.sort_values("Max_Drawdown").head(10)[valid_cols],
-                     use_container_width=True)
+
+        if "Max_Drawdown" in risk_df.columns:
+            st.dataframe(
+                risk_df.sort_values("Max_Drawdown")
+                .head(10)[valid_cols],
+                use_container_width=True
+            )
+        else:
+            st.warning("Max_Drawdown column not found in risk report.")
 
         # VaR distribution
         st.subheader("Value at Risk (95%) Distribution")
-        fig = px.histogram(risk_df, x="VaR_95", nbins=30, title="Daily VaR(95%) Distribution")
-        st.plotly_chart(fig, use_container_width=True)
+
+        if "VaR_95" in risk_df.columns:
+            fig = px.histogram(
+                risk_df,
+                x="VaR_95",
+                nbins=30,
+                title="Daily VaR(95%) Distribution"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("VaR_95 column not found in risk report.")
+
     else:
         st.warning("Risk data not found. Run src/risk_assessment.py first.")
 
@@ -406,36 +483,83 @@ elif page == "🧠 Explainability":
 
     # Single stock explanation
     st.subheader("Explain Single Stock Prediction")
-    sel = st.selectbox("Stock", symbols, key="explain_stock")
+
+selected_stock = st.selectbox(
+    "Stock",
+    sorted(features_df["Symbol"].unique())
+)
+
+stock_data = features_df[features_df["Symbol"] == selected_stock].copy()
+
+if len(stock_data) == 0:
+    st.warning("No data found for selected stock.")
+else:
+    latest_row = stock_data.sort_values("Date").tail(1).copy()
+
+    # Use same feature columns used during model training
+    feature_cols = [
+        "ret_1d", "ret_5d", "ret_10d", "ret_21d", "ret_63d",
+        "price_to_SMA20", "price_to_SMA50", "price_to_SMA200",
+        "RSI_14", "MACD_line", "MACD_signal", "MACD_hist",
+        "BB_pctB", "vol_10d", "vol_21d", "vol_63d",
+        "vol_ratio", "ATR_pct", "momentum_10", "momentum_21",
+        "drawdown", "dow", "month"
+    ]
+
+    available_feature_cols = [c for c in feature_cols if c in latest_row.columns]
+
+    X_explain = latest_row[available_feature_cols].copy()
+
+    # CRITICAL FIX: convert all features to numeric
+    for col in available_feature_cols:
+        X_explain[col] = pd.to_numeric(X_explain[col], errors="coerce")
+
+    # Fill any missing numeric values
+    X_explain = X_explain.replace([np.inf, -np.inf], np.nan)
+    X_explain = X_explain.fillna(0)
+
     try:
-        model = joblib.load(os.path.join(MODEL_DIR, "lgb_reg.pkl"))
-        import shap
-        from src.prediction_engine import FEATURE_COLS
-        stock_df = df[(df["Symbol"] == sel)].dropna(subset=FEATURE_COLS).sort_values("Date")
-        if len(stock_df) > 0:
-            X = stock_df.iloc[-1][FEATURE_COLS].values.reshape(1, -1)
-            X_df = pd.DataFrame(X, columns=FEATURE_COLS)
-            pred = model.predict(X_df)[0]
-            st.info(f"Predicted 21-day return: **{pred:.2%}**")
+        pred = lgb_model.predict(X_explain)[0]
 
-            explainer = shap.TreeExplainer(model)
-            sv = explainer.shap_values(X_df)
-            exp_df = pd.DataFrame({
-                "Feature": FEATURE_COLS,
-                "Value": X_df.values[0],
-                "SHAP Contribution": sv[0]
-            }).sort_values("SHAP Contribution", key=abs, ascending=False)
+        st.metric(
+            "Predicted 21-Day Return",
+            f"{pred:.2%}"
+        )
 
-            fig = px.bar(exp_df.head(10), x="SHAP Contribution", y="Feature",
-                         orientation="h", color="SHAP Contribution",
-                         color_continuous_scale="RdYlGn",
-                         title=f"Top Factors for {sel} Prediction")
-            fig.update_layout(yaxis=dict(autorange="reversed"), height=400)
-            st.plotly_chart(fig, use_container_width=True)
+        shap_values = explainer.shap_values(X_explain)
 
-            st.dataframe(exp_df.head(10).style.format({
-                "Value": "{:.4f}", "SHAP Contribution": "{:.6f}"
-            }), use_container_width=True)
+        # Handle SHAP output shape safely
+        if isinstance(shap_values, list):
+            shap_vals = shap_values[0][0]
+        else:
+            shap_vals = shap_values[0]
+
+        explanation_df = pd.DataFrame({
+            "Feature": available_feature_cols,
+            "SHAP_Value": shap_vals,
+            "Feature_Value": X_explain.iloc[0].values
+        })
+
+        explanation_df["Abs_SHAP"] = explanation_df["SHAP_Value"].abs()
+        explanation_df = explanation_df.sort_values("Abs_SHAP", ascending=False).head(10)
+
+        fig = px.bar(
+            explanation_df,
+            x="SHAP_Value",
+            y="Feature",
+            orientation="h",
+            title=f"Top Feature Contributions for {selected_stock}",
+            hover_data=["Feature_Value"]
+        )
+
+        fig.update_layout(yaxis={"categoryorder": "total ascending"})
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.dataframe(
+            explanation_df[["Feature", "Feature_Value", "SHAP_Value"]],
+            use_container_width=True
+        )
+
     except Exception as e:
         st.warning(f"Could not generate explanation: {e}")
 
