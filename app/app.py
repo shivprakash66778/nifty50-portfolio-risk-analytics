@@ -484,35 +484,78 @@ elif page == "🧠 Explainability":
     # Single stock explanation
     st.subheader("Explain Single Stock Prediction")
     sel = st.selectbox("Stock", symbols, key="explain_stock")
+    
     try:
         model = joblib.load(os.path.join(MODEL_DIR, "lgb_reg.pkl"))
+    
         import shap
         from src.prediction_engine import FEATURE_COLS
-        stock_df = df[(df["Symbol"] == sel)].dropna(subset=FEATURE_COLS).sort_values("Date")
-        if len(stock_df) > 0:
-            X = stock_df.iloc[-1][FEATURE_COLS].values.reshape(1, -1)
-            X_df = pd.DataFrame(X, columns=FEATURE_COLS)
-            pred = model.predict(X_df)[0]
-            st.info(f"Predicted 21-day return: **{pred:.2%}**")
-
-            explainer = shap.TreeExplainer(model)
-            sv = explainer.shap_values(X_df)
-            exp_df = pd.DataFrame({
-                "Feature": FEATURE_COLS,
-                "Value": X_df.values[0],
-                "SHAP Contribution": sv[0]
-            }).sort_values("SHAP Contribution", key=abs, ascending=False)
-
-            fig = px.bar(exp_df.head(10), x="SHAP Contribution", y="Feature",
-                         orientation="h", color="SHAP Contribution",
-                         color_continuous_scale="RdYlGn",
-                         title=f"Top Factors for {sel} Prediction")
-            fig.update_layout(yaxis=dict(autorange="reversed"), height=400)
-            st.plotly_chart(fig, use_container_width=True)
-
-            st.dataframe(exp_df.head(10).style.format({
-                "Value": "{:.4f}", "SHAP Contribution": "{:.6f}"
-            }), use_container_width=True)
+    
+        stock_df = df[df["Symbol"] == sel].copy()
+    
+        # Keep only required feature columns that exist
+        available_cols = [c for c in FEATURE_COLS if c in stock_df.columns]
+    
+        if len(available_cols) == 0:
+            st.warning("No model feature columns found in dataset.")
+        else:
+            # Convert feature columns to numeric before dropna/model prediction
+            for col in available_cols:
+                stock_df[col] = pd.to_numeric(stock_df[col], errors="coerce")
+    
+            stock_df = stock_df.dropna(subset=available_cols).sort_values("Date")
+    
+            if len(stock_df) > 0:
+                # Create one-row feature dataframe with correct numeric dtype
+                X_df = stock_df.iloc[[-1]][available_cols].copy()
+                X_df = X_df.apply(pd.to_numeric, errors="coerce")
+                X_df = X_df.replace([np.inf, -np.inf], np.nan).fillna(0)
+                X_df = X_df.astype("float64")
+    
+                pred = model.predict(X_df)[0]
+                st.info(f"Predicted 21-day return: **{pred:.2%}**")
+    
+                explainer = shap.TreeExplainer(model)
+                sv = explainer.shap_values(X_df)
+    
+                # Handle SHAP output safely
+                if isinstance(sv, list):
+                    shap_values = sv[0][0]
+                else:
+                    shap_values = sv[0]
+    
+                exp_df = pd.DataFrame({
+                    "Feature": available_cols,
+                    "Value": X_df.iloc[0].values,
+                    "SHAP Contribution": shap_values
+                })
+    
+                exp_df["Abs Contribution"] = exp_df["SHAP Contribution"].abs()
+                exp_df = exp_df.sort_values("Abs Contribution", ascending=False)
+    
+                fig = px.bar(
+                    exp_df.head(10),
+                    x="SHAP Contribution",
+                    y="Feature",
+                    orientation="h",
+                    color="SHAP Contribution",
+                    color_continuous_scale="RdYlGn",
+                    title=f"Top Factors for {sel} Prediction"
+                )
+    
+                fig.update_layout(yaxis=dict(autorange="reversed"), height=400)
+                st.plotly_chart(fig, use_container_width=True)
+    
+                st.dataframe(
+                    exp_df.head(10)[["Feature", "Value", "SHAP Contribution"]].style.format({
+                        "Value": "{:.4f}",
+                        "SHAP Contribution": "{:.6f}"
+                    }),
+                    use_container_width=True
+                )
+            else:
+                st.warning("Not enough valid numeric feature data found for this stock.")
+    
     except Exception as e:
         st.warning(f"Could not generate explanation: {e}")
 
