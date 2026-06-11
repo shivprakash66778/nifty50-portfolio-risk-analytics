@@ -198,6 +198,14 @@ pip install -r requirements.txt
 
 ## Running the Application
 
+
+### Live Demo
+
+The Streamlit dashboard is deployed here:
+
+[Open Live Streamlit App](https://3xzfswbphmc3fwu97cwtpu.streamlit.app/)
+
+
 ### Quick Start (Dashboard)
 ```bash
 streamlit run app/app.py
