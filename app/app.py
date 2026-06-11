@@ -483,36 +483,83 @@ elif page == "🧠 Explainability":
 
     # Single stock explanation
     st.subheader("Explain Single Stock Prediction")
-    sel = st.selectbox("Stock", symbols, key="explain_stock")
+
+selected_stock = st.selectbox(
+    "Stock",
+    sorted(features_df["Symbol"].unique())
+)
+
+stock_data = features_df[features_df["Symbol"] == selected_stock].copy()
+
+if len(stock_data) == 0:
+    st.warning("No data found for selected stock.")
+else:
+    latest_row = stock_data.sort_values("Date").tail(1).copy()
+
+    # Use same feature columns used during model training
+    feature_cols = [
+        "ret_1d", "ret_5d", "ret_10d", "ret_21d", "ret_63d",
+        "price_to_SMA20", "price_to_SMA50", "price_to_SMA200",
+        "RSI_14", "MACD_line", "MACD_signal", "MACD_hist",
+        "BB_pctB", "vol_10d", "vol_21d", "vol_63d",
+        "vol_ratio", "ATR_pct", "momentum_10", "momentum_21",
+        "drawdown", "dow", "month"
+    ]
+
+    available_feature_cols = [c for c in feature_cols if c in latest_row.columns]
+
+    X_explain = latest_row[available_feature_cols].copy()
+
+    # CRITICAL FIX: convert all features to numeric
+    for col in available_feature_cols:
+        X_explain[col] = pd.to_numeric(X_explain[col], errors="coerce")
+
+    # Fill any missing numeric values
+    X_explain = X_explain.replace([np.inf, -np.inf], np.nan)
+    X_explain = X_explain.fillna(0)
+
     try:
-        model = joblib.load(os.path.join(MODEL_DIR, "lgb_reg.pkl"))
-        import shap
-        from src.prediction_engine import FEATURE_COLS
-        stock_df = df[(df["Symbol"] == sel)].dropna(subset=FEATURE_COLS).sort_values("Date")
-        if len(stock_df) > 0:
-            X = stock_df.iloc[-1][FEATURE_COLS].values.reshape(1, -1)
-            X_df = pd.DataFrame(X, columns=FEATURE_COLS)
-            pred = model.predict(X_df)[0]
-            st.info(f"Predicted 21-day return: **{pred:.2%}**")
+        pred = lgb_model.predict(X_explain)[0]
 
-            explainer = shap.TreeExplainer(model)
-            sv = explainer.shap_values(X_df)
-            exp_df = pd.DataFrame({
-                "Feature": FEATURE_COLS,
-                "Value": X_df.values[0],
-                "SHAP Contribution": sv[0]
-            }).sort_values("SHAP Contribution", key=abs, ascending=False)
+        st.metric(
+            "Predicted 21-Day Return",
+            f"{pred:.2%}"
+        )
 
-            fig = px.bar(exp_df.head(10), x="SHAP Contribution", y="Feature",
-                         orientation="h", color="SHAP Contribution",
-                         color_continuous_scale="RdYlGn",
-                         title=f"Top Factors for {sel} Prediction")
-            fig.update_layout(yaxis=dict(autorange="reversed"), height=400)
-            st.plotly_chart(fig, use_container_width=True)
+        shap_values = explainer.shap_values(X_explain)
 
-            st.dataframe(exp_df.head(10).style.format({
-                "Value": "{:.4f}", "SHAP Contribution": "{:.6f}"
-            }), use_container_width=True)
+        # Handle SHAP output shape safely
+        if isinstance(shap_values, list):
+            shap_vals = shap_values[0][0]
+        else:
+            shap_vals = shap_values[0]
+
+        explanation_df = pd.DataFrame({
+            "Feature": available_feature_cols,
+            "SHAP_Value": shap_vals,
+            "Feature_Value": X_explain.iloc[0].values
+        })
+
+        explanation_df["Abs_SHAP"] = explanation_df["SHAP_Value"].abs()
+        explanation_df = explanation_df.sort_values("Abs_SHAP", ascending=False).head(10)
+
+        fig = px.bar(
+            explanation_df,
+            x="SHAP_Value",
+            y="Feature",
+            orientation="h",
+            title=f"Top Feature Contributions for {selected_stock}",
+            hover_data=["Feature_Value"]
+        )
+
+        fig.update_layout(yaxis={"categoryorder": "total ascending"})
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.dataframe(
+            explanation_df[["Feature", "Feature_Value", "SHAP_Value"]],
+            use_container_width=True
+        )
+
     except Exception as e:
         st.warning(f"Could not generate explanation: {e}")
 
